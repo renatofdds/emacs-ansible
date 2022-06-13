@@ -51,6 +51,7 @@
 ;;require
 (require 's)
 (require 'f)
+(require 'seq)
 
 ;; the 'cl package has been deprecated in favour of 'cl-lib. Load 'cl
 ;; on emacs < 26, otherwise load 'cl-lib.
@@ -86,6 +87,11 @@
 
 (defvar ansible-hook nil
   "Hook.")
+
+(defconst ansible-dir (file-name-directory (or load-file-name
+                                               buffer-file-name)))
+
+(defconst ansible-snip-dir (expand-file-name "snippets" ansible-dir))
 
 (defvar ansible-section-face 'ansible-section-face)
 (defface ansible-section-face
@@ -263,14 +269,7 @@
   (font-lock-remove-keywords 'nil ansible-playbook-font-lock)
   (font-lock-flush))
 
-(defun ansible-maybe-unload-snippets(&optional buffer-count)
-  "Unload ansible snippets in case no other ansible buffers exists."
-  ;; mitigates: https://github.com/k1LoW/emacs-ansible/issues/5
-  (when (and (featurep 'yasnippet)
-	     (= (or buffer-count 1)	;when called via kill-hook, the buffer is still existent
-		(seq-count (lambda (b) (with-current-buffer b ansible)) (buffer-list))))
-    (setq yas-snippet-dirs (delete ansible-snip-dir yas-snippet-dirs))
-    (yas-reload-all)))
+(defvar yas-snippet-dirs)
 
 ;;;###autoload
 (define-minor-mode ansible
@@ -285,13 +284,23 @@
         (ansible-dict-initialize)
         (ansible-remove-font-lock)
         (ansible-add-font-lock)
-	(when (featurep 'yasnippet)
-	  (add-to-list 'yas-snippet-dirs ansible-snip-dir t)
-	  (yas-load-directory ansible-snip-dir))
-	(add-hook 'kill-buffer-hook #'ansible-maybe-unload-snippets nil t)
+				(when (and (featurep 'yasnippet) (fboundp 'yas-load-directory))
+					(add-to-list 'yas-snippet-dirs ansible-snip-dir t)
+					(yas-load-directory ansible-snip-dir))
+				(add-hook 'kill-buffer-hook #'ansible-maybe-unload-snippets nil t)
         (run-hooks 'ansible-hook))
     (ansible-remove-font-lock)
     (ansible-maybe-unload-snippets 0)))
+
+(defun ansible-maybe-unload-snippets(&optional buffer-count)
+  "Unload ansible snippets in case no other ansible buffers exists."
+  ;; mitigates: https://github.com/k1LoW/emacs-ansible/issues/5
+  (when (and (featurep 'yasnippet)
+						 (fboundp 'yas-reload-all)
+						 (= (or buffer-count 1)	;when called via kill-hook, the buffer is still existent
+								(seq-count (lambda (b) (with-current-buffer b ansible)) (buffer-list))))
+    (setq yas-snippet-dirs (delete ansible-snip-dir yas-snippet-dirs))
+    (yas-reload-all)))
 
 (defun ansible-update-root-path ()
   "Update ansible-root-path."
@@ -303,17 +312,17 @@
 (defun ansible-find-root-path ()
   "Find ansible directory."
   (let ((current-dir (f-expand default-directory)))
-    (loop with count = 0
-          until (f-exists? (f-join current-dir "roles"))
-          ;; Return nil if outside the value of
-          if (= count ansible-dir-search-limit)
-          do (return nil)
-          ;; Or search upper directories.
-          else
-          do (incf count)
-          (unless (f-root? current-dir)
-            (setq current-dir (f-dirname current-dir)))
-          finally return current-dir)))
+    (cl-loop with count = 0
+						 until (f-exists? (f-join current-dir "roles"))
+						 ;; Return nil if outside the value of
+						 if (= count ansible-dir-search-limit)
+						 do (cl-return nil)
+						 ;; Or search upper directories.
+						 else
+						 do (cl-incf count)
+						 (unless (f-root? current-dir)
+							 (setq current-dir (f-dirname current-dir)))
+						 finally return current-dir)))
 
 (defun ansible-list-playbooks ()
   "Find .yml files in ansible-root-path."
@@ -324,7 +333,8 @@
     nil))
 
 (defun ansible-vault-buffer (mode)
-  "Execute ansible-vault (MODE STR should be 'decrypt' or 'encrypt') and update current buffer."
+  "Execute ansible-vault MODE and update current buffer.
+MODE should be \"decrypt\" or \"encrypt\"."
   (let* ((input (buffer-substring-no-properties (point-min) (point-max)))
          (output (ansible-vault mode input)))
     (delete-region (point-min) (point-max))
@@ -363,11 +373,6 @@
   "Encrypt current buffer."
   (interactive)
   (ansible-vault-buffer "encrypt"))
-
-(defconst ansible-dir (file-name-directory (or load-file-name
-                                               buffer-file-name)))
-
-(defconst ansible-snip-dir (expand-file-name "snippets" ansible-dir))
 
 (defun ansible-auto-decrypt-encrypt ()
   "Decrypt current buffer if it is a vault encrypted file.
